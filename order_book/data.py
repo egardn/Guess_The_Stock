@@ -3,87 +3,62 @@ import pandas as pd
 import gc
 import os
 from pathlib import Path
+import pickle
 
-class OrderBookDataGenerator:
+class PreprocessedDataGenerator:
     """
-    Optimized data generator for order book data with 100-row observations.
-    Only handles Parquet files for X data.
+    Generator for loading preprocessed data in chunks
     """
-    
-    def __init__(self, X_path, y_path, chunk_size=100):
+    def __init__(self, data_path, chunk_size=1000):
         """
-        Initialize the data generator.
+        Initialize the preprocessed data generator
         
         Args:
-            X_path: Path to X data (parquet file only)
-            y_path: Path to y data (CSV file)
-            chunk_size: Number of observations to load at once
+            data_path: Path to preprocessed parquet file
+            chunk_size: Number of observations to load per chunk
         """
-        self.X_path = Path(X_path)
-        self.y_path = Path(y_path)
+        self.data_path = data_path
         self.chunk_size = chunk_size
         
-        # Ensure X_path is a parquet file
-        if self.X_path.suffix != '.parquet':
-            raise ValueError("X_path must be a parquet file")
-        
-        # Load y data completely
-        self.y_data = pd.read_csv(self.y_path)
-        
-        # Get observation information
-        self.events_per_obs = 100  # Known from problem description
-        
-        # Load observation IDs from parquet
-        self.all_obs_ids = pd.read_parquet(
-            self.X_path, 
-            columns=['obs_id']
-        )['obs_id'].unique()
-        
-        # Current position in the observation IDs list
-        self.current_pos = 0
+        # Get total number of observations
+        self.total_obs = pd.read_parquet(data_path, columns=['obs_id']).shape[0]
+        print(f"Preprocessed data contains {self.total_obs} observations")
         
     def generate_chunks(self, shuffle=True):
         """
-        Generator that yields chunks of data for training.
+        Generate chunks of preprocessed data
         
         Args:
-            shuffle: Whether to shuffle the observation IDs
+            shuffle: Whether to shuffle the row indices
             
         Yields:
-            Tuple of (X_chunk, y_chunk, chunk_obs_ids)
+            Dictionary with preprocessed features and labels
         """
-        # Reset position
-        self.current_pos = 0
+        # Create row indices
+        indices = np.arange(self.total_obs)
         
-        # Get all observation IDs
-        obs_ids = np.array(self.all_obs_ids)
-        
-        # Shuffle observations if requested
+        # Shuffle if requested
         if shuffle:
-            np.random.shuffle(obs_ids)
-        
-        # Process in chunks of observations
-        while self.current_pos < len(obs_ids):
-            # Get obs_ids for this chunk
-            chunk_obs_ids = obs_ids[self.current_pos:self.current_pos + self.chunk_size]
-            self.current_pos += self.chunk_size
+            np.random.shuffle(indices)
             
-            if len(chunk_obs_ids) == 0:
-                break
+        # Process in chunks
+        for i in range(0, self.total_obs, self.chunk_size):
+            chunk_indices = indices[i:i + self.chunk_size]
             
-            # Read X data for these observation IDs from parquet
-            X_chunk = pd.read_parquet(
-                self.X_path, 
-                filters=[('obs_id', 'in', chunk_obs_ids.tolist())]
-            )
+            # Read the entire file first, then select rows
+            df_full = pd.read_parquet(self.data_path)
+            df_chunk = df_full.iloc[chunk_indices]
             
-            # Get corresponding y data
-            y_chunk = self.y_data[self.y_data['obs_id'].isin(chunk_obs_ids)]
+            # Extract features and labels
+            X_filtered = {
+                'venue_input': np.stack([pickle.loads(x) for x in df_chunk['venue_input']]),
+                'action_input': np.stack([pickle.loads(x) for x in df_chunk['action_input']]),
+                'trade_input': np.stack([pickle.loads(x) for x in df_chunk['trade_input']]),
+                'numeric_input': np.stack([pickle.loads(x) for x in df_chunk['numeric_input']])
+            }
+            y_values = np.array(df_chunk['label'])
             
-            # Clean up memory
-            gc.collect()
-            
-            yield X_chunk, y_chunk, chunk_obs_ids
+            yield X_filtered, y_values
 
 
 def convert_x_to_parquet(csv_path, parquet_path=None, chunksize=100000, dtype=None):

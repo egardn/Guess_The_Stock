@@ -82,41 +82,54 @@ class VectorizedSequenceReshaper(BaseEstimator, TransformerMixin):
         return self
     
     def transform(self, X):
-        # Group by observation ID
-        grouped = X.groupby('obs_id')
-        n_sequences = len(grouped)
+        # Get unique observation IDs in the order they appear
+        obs_ids = pd.Series(X['obs_id'].unique())
+        n_sequences = len(obs_ids)
         
-        # Pre-allocate arrays
+        # Create a mapping from obs_id to sequence index
+        obs_id_to_idx = {oid: i for i, oid in enumerate(obs_ids)}
+        
+        # Create position column (sequence position within each group)
+        X = X.copy()  # Avoid modifying the input
+        X['pos'] = X.groupby('obs_id').cumcount()
+        
+        # Filter to keep only positions within seq_length
+        valid_mask = X['pos'] < self.seq_length
+        X_valid = X[valid_mask]
+        
+        # Get sequence indices for each row
+        X_valid['seq_idx'] = X_valid['obs_id'].map(obs_id_to_idx)
+          
+        # Extract arrays for indexing
+        seq_indices = X_valid['seq_idx'].values
+        positions = X_valid['pos'].values
+        
+        # Pre-allocate output arrays
         venue_data = np.zeros((n_sequences, self.seq_length), dtype=np.int32)
         action_data = np.zeros((n_sequences, self.seq_length), dtype=np.int32)
         trade_data = np.zeros((n_sequences, self.seq_length), dtype=np.int32)
         numeric_data = np.zeros((n_sequences, self.seq_length, 6), dtype=np.float32)
+         
+        # Fill all arrays using advanced indexing
+        venue_data[seq_indices, positions] = X_valid['venue_idx'].values
+        action_data[seq_indices, positions] = X_valid['action_idx'].values
+        trade_data[seq_indices, positions] = X_valid['trade_idx'].values
         
-        obs_ids = []
-        
-        for idx, (obs_id, group) in enumerate(grouped):
-            obs_ids.append(obs_id)
-            seq = group.reset_index(drop=True)
-            
-            # Fill in categorical indices
-            venue_data[idx, :len(seq)] = seq['venue_idx'].values[:self.seq_length]
-            action_data[idx, :len(seq)] = seq['action_idx'].values[:self.seq_length]
-            trade_data[idx, :len(seq)] = seq['trade_idx'].values[:self.seq_length]
-            
-            # Fill in numeric features
-            numeric_data[idx, :len(seq), 0] = seq['bid'].values[:self.seq_length]
-            numeric_data[idx, :len(seq), 1] = seq['ask'].values[:self.seq_length]
-            numeric_data[idx, :len(seq), 2] = seq['price'].values[:self.seq_length]
-            numeric_data[idx, :len(seq), 3] = seq['log_bid_size'].values[:self.seq_length]
-            numeric_data[idx, :len(seq), 4] = seq['log_ask_size'].values[:self.seq_length]
-            numeric_data[idx, :len(seq), 5] = seq['log_flux'].values[:self.seq_length]
-        
+        # Fill numeric features
+        numeric_data[seq_indices, positions, 0] = X_valid['bid'].values
+        numeric_data[seq_indices, positions, 1] = X_valid['ask'].values
+        numeric_data[seq_indices, positions, 2] = X_valid['price'].values
+        numeric_data[seq_indices, positions, 3] = X_valid['log_bid_size'].values
+        numeric_data[seq_indices, positions, 4] = X_valid['log_ask_size'].values
+        numeric_data[seq_indices, positions, 5] = X_valid['log_flux'].values
+
         return {
             'venue_input': venue_data,
             'action_input': action_data,
             'trade_input': trade_data,
             'numeric_input': numeric_data
-        }, obs_ids
+        }, obs_ids.tolist()
+
 
 # Define the full pipeline
 def create_order_book_pipeline():
