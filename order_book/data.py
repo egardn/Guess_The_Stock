@@ -45,17 +45,23 @@ class PreprocessedDataGenerator:
         for i in range(0, self.total_obs, self.chunk_size):
             chunk_indices = indices[i:i + self.chunk_size]
             
-            # Read the entire file first, then select rows
-            df_full = pd.read_parquet(self.data_path)
-            df_chunk = df_full.iloc[chunk_indices]
+            # Read the chunk of data
+            df_chunk = pd.read_parquet(self.data_path).iloc[chunk_indices]
             
-            # Extract features and labels
-            X_filtered = {
-                'venue_input': np.stack([pickle.loads(x) for x in df_chunk['venue_input']]),
-                'action_input': np.stack([pickle.loads(x) for x in df_chunk['action_input']]),
-                'trade_input': np.stack([pickle.loads(x) for x in df_chunk['trade_input']]),
-                'numeric_input': np.stack([pickle.loads(x) for x in df_chunk['numeric_input']])
-            }
+            # Determine data format based on columns
+            if 'features' in df_chunk.columns:
+                # GB model format - features are stored in a single column
+                X_features = [pickle.loads(x) for x in df_chunk['features']]
+                X_filtered = pd.DataFrame(X_features)
+            else:
+                # GRU model format - features are stored in separate columns
+                X_filtered = {
+                    'venue_input': np.stack([pickle.loads(x) for x in df_chunk['venue_input']]),
+                    'action_input': np.stack([pickle.loads(x) for x in df_chunk['action_input']]),
+                    'trade_input': np.stack([pickle.loads(x) for x in df_chunk['trade_input']]),
+                    'numeric_input': np.stack([pickle.loads(x) for x in df_chunk['numeric_input']])
+                }
+            
             y_values = np.array(df_chunk['label'])
             
             yield X_filtered, y_values

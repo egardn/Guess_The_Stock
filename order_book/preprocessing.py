@@ -131,15 +131,133 @@ class VectorizedSequenceReshaper(BaseEstimator, TransformerMixin):
         }, obs_ids.tolist()
 
 
-# Define the full pipeline
-def create_order_book_pipeline():
-    pipeline = Pipeline([
-        ('bid_size_filter', NonPositiveBidSizeFilter()),  # Add the filter BEFORE vectorizer
-        ('vectorizer', DataVectorizer()),
-        ('reshaper', VectorizedSequenceReshaper()),
-        # The model would be added after preprocessing in the training script
-    ])
-    return pipeline
+# Add this class to preprocessing.py
+class GBFeatureExtractor(BaseEstimator, TransformerMixin):
+    """
+    Transforms sequence data from VectorizedSequenceReshaper into tabular features 
+    suitable for gradient boosting models.
+    """
+    def __init__(self):
+        self.n_features_in_ = None
+        
+    def fit(self, X, y=None):
+        # X is a tuple (dict_of_arrays, obs_ids) from VectorizedSequenceReshaper
+        self.n_features_in_ = len(X[0]) if isinstance(X, tuple) else X.shape[1]
+        return self
+    
+    def transform(self, X):
+        # Handle input format from VectorizedSequenceReshaper
+        
+        data_dict, obs_ids = X
+    
+        # Get sequence data
+        venue_data = data_dict['venue_input']      # (n_sequences, seq_length)
+        action_data = data_dict['action_input']    # (n_sequences, seq_length)
+        trade_data = data_dict['trade_input']      # (n_sequences, seq_length)
+        numeric_data = data_dict['numeric_input']  # (n_sequences, seq_length, 6)
+        
+        n_sequences = len(obs_ids)
+        features = {}
+        
+        # Add observation IDs
+        features['obs_id'] = obs_ids
+        
+        # 1. Extract statistics from numeric data
+        numeric_feature_names = ['bid', 'ask', 'price', 'log_bid_size', 'log_ask_size', 'log_flux']
+        
+        for i, feature_name in enumerate(numeric_feature_names):
+            # Extract this feature for all sequences
+            feature_values = numeric_data[:, :, i]
+            
+            # Calculate statistics
+            features[f'{feature_name}_mean'] = np.mean(feature_values, axis=1)
+            features[f'{feature_name}_std'] = np.std(feature_values, axis=1)
+            features[f'{feature_name}_min'] = np.min(feature_values, axis=1)
+            features[f'{feature_name}_max'] = np.max(feature_values, axis=1)
+            features[f'{feature_name}_median'] = np.median(feature_values, axis=1)
+            features[f'{feature_name}_last'] = feature_values[:, -1]
+            features[f'{feature_name}_first'] = feature_values[:, 0]
+            
+            # Add some advanced features
+            if feature_name in ['bid', 'ask', 'price']:
+                features[f'{feature_name}_range'] = features[f'{feature_name}_max'] - features[f'{feature_name}_min']
+                features[f'{feature_name}_volatility'] = features[f'{feature_name}_std'] / (features[f'{feature_name}_mean'] + 1e-10)
+        
+        # 2. Extract categorical features
+        # Most common venue, action, trade
+        for name, data in [('venue', venue_data), ('action', action_data), ('trade', trade_data)]:
+            # Get most common value for each sequence
+            most_common = np.zeros(n_sequences)
+            for i in range(n_sequences):
+                values, counts = np.unique(data[i], return_counts=True)
+                if len(counts) > 0:
+                    most_common[i] = values[np.argmax(counts)]
+            
+            features[f'{name}_most_common'] = most_common
+            
+            # Count unique values
+            unique_counts = np.zeros(n_sequences)
+            for i in range(n_sequences):
+                unique_counts[i] = len(np.unique(data[i]))
+            
+            features[f'{name}_unique_count'] = unique_counts
+
+        # 3. Compute transition patterns (e.g., how often the action changes)
+        for name, data in [('venue', venue_data), ('action', action_data), ('trade', trade_data)]:
+            transitions = np.zeros(n_sequences)
+            for i in range(n_sequences):
+                # Count how many times the value changes
+                transitions[i] = np.sum(data[i, 1:] != data[i, :-1])
+            
+            features[f'{name}_transition_count'] = transitions
+        
+        # 4. Special features for price movement
+        price_data = numeric_data[:, :, 2]  # price is at index 2
+        
+        # Calculate price trend (positive/negative moves)
+        price_moves = np.diff(price_data, axis=1)
+        features['price_up_moves'] = np.sum(price_moves > 0, axis=1)
+        features['price_down_moves'] = np.sum(price_moves < 0, axis=1)
+        features['price_trend'] = features['price_up_moves'] - features['price_down_moves']
+        
+        # 5. Bid-ask spread statistics
+        bid_data = numeric_data[:, :, 0]  # bid is at index 0
+        ask_data = numeric_data[:, :, 1]  # ask is at index 1
+        spread = ask_data - bid_data
+        
+        features['spread_mean'] = np.mean(spread, axis=1)
+        features['spread_std'] = np.std(spread, axis=1)
+        features['spread_min'] = np.min(spread, axis=1)
+        features['spread_max'] = np.max(spread, axis=1)
+        
+        # Convert to DataFrame
+        df = pd.DataFrame(features)
+        
+        return df, obs_ids
+
+
+# Modify this function in preprocessing.py
+
+def create_order_book_pipeline(model_type="gru"):
+    if model_type.lower() == "gb":
+        # Create a completely independent pipeline for gradient boosting
+        gb_pipeline = Pipeline([
+            ('bid_size_filter', NonPositiveBidSizeFilter()),
+            ('vectorizer', DataVectorizer()),
+            ('reshaper', VectorizedSequenceReshaper()), # Added missing comma here
+            ('gb_feature_extractor', GBFeatureExtractor())
+        ])
+        return gb_pipeline
+    elif model_type.lower() == "gru":
+        # For GRU, use the sequence-based pipeline
+        gru_pipeline = Pipeline([
+            ('bid_size_filter', NonPositiveBidSizeFilter()),
+            ('vectorizer', DataVectorizer()),
+            ('reshaper', VectorizedSequenceReshaper()),
+        ])
+        return gru_pipeline
+    else:
+        raise ValueError(f"Unknown model type: {model_type}. Use 'gb' or 'gru'.")
 
 def visualize_preprocessing(raw_data, processed_data, obs_ids, obs_id=None):
     """

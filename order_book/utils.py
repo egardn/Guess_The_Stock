@@ -4,7 +4,7 @@ import gc
 import pickle
 from .data import PreprocessedDataGenerator
 from .preprocessing import create_order_book_pipeline
-from .models import OrderBookEmbeddingModel
+from .models import * 
 import os
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -132,9 +132,9 @@ def load_all_data(X_path, y_path):
     print(f"Loaded all data: X shape={X_data.shape}, y shape={y_data.shape}")
     return X_data, y_data
 
-def save_model_checkpoint(model, pipeline, epoch, chunk_idx, model_save_dir, is_final=False):
+def save_model_checkpoint(model, pipeline, epoch, chunk_idx, model_save_dir, is_final=False, model_type="gru"):
     """
-    Save model checkpoint to disk
+    Save model checkpoint to disk with model type information
     
     Args:
         model: The model to save
@@ -143,6 +143,7 @@ def save_model_checkpoint(model, pipeline, epoch, chunk_idx, model_save_dir, is_
         chunk_idx: Current chunk index
         model_save_dir: Directory to save the model
         is_final: Whether this is the final model
+        model_type: Type of model ("gru" or "gb")
     """
     if model_save_dir is None:
         return
@@ -150,32 +151,64 @@ def save_model_checkpoint(model, pipeline, epoch, chunk_idx, model_save_dir, is_
     os.makedirs(model_save_dir, exist_ok=True)
     
     if is_final:
-        checkpoint_path = os.path.join(model_save_dir, "final_model.pkl")
+        checkpoint_path = os.path.join(model_save_dir, f"final_model_{model_type}.pkl")
         data_to_save = {
             'model': model,
             'pipeline': pipeline,
-            'epochs_completed': epoch
+            'epochs_completed': epoch,
+            'model_type': model_type
         }
     else:
         checkpoint_path = os.path.join(
             model_save_dir, 
-            f"model_epoch{epoch+1}_chunk{chunk_idx+1}.pkl"
+            f"model_{model_type}_epoch{epoch+1}_chunk{chunk_idx+1}.pkl"
         )
         data_to_save = {
             'model': model,
             'pipeline': pipeline,
             'epoch': epoch + 1,
-            'chunk': chunk_idx + 1
+            'chunk': chunk_idx + 1,
+            'model_type': model_type
         }
     
     with open(checkpoint_path, 'wb') as f:
         pickle.dump(data_to_save, f)
     
-    print(f"Model saved to {checkpoint_path}")
+    print(f"{model_type.upper()} model saved to {checkpoint_path}")
 
+def create_model(model_type="gru", **kwargs):
+    """
+    Factory function to create a model of the specified type
+    
+    Args:
+        model_type: "gru" for OrderBookEmbeddingModel or "gb" for OrderBookGradientBoostingModel
+        **kwargs: Parameters to pass to the model constructor
+    
+    Returns:
+        Initialized model instance
+    """
+    if model_type.lower() == "gru":
+        return OrderBookEmbeddingModel(**kwargs)
+    elif model_type.lower() == "gb":
+        # Extract GB-specific parameters or use defaults
+        gb_params = {
+            "n_estimators": kwargs.get("n_estimators", 100),
+            "learning_rate": kwargs.get("learning_rate", 0.1),
+            "max_depth": kwargs.get("max_depth", 7),
+            "min_data_in_leaf": kwargs.get("min_data_in_leaf", 1),
+            "feature_fraction": kwargs.get("feature_fraction", 1.0),
+            "bagging_fraction": kwargs.get("bagging_fraction", 1.0),
+            "bagging_freq": kwargs.get("bagging_freq", 0),
+            "n_categories": kwargs.get("n_categories", 24),
+            "batch_size": kwargs.get("batch_size", 1000)
+        }
+        return OrderBookGradientBoostingModel(**gb_params)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}. Choose 'gru' or 'gb'.")
 
 def setup_pipeline_and_model(X_path, y_path, batch_size, 
-                            val_split=0.2, preprocessed_dir=None):
+                           val_split=0.2, preprocessed_dir=None,
+                           model_type="gru"):
     """
     Set up preprocessing pipeline, preprocess all data once, and initialize the model
     
@@ -183,9 +216,9 @@ def setup_pipeline_and_model(X_path, y_path, batch_size,
         X_path: Path to X data
         y_path: Path to y data
         batch_size: Batch size for model training
-        chunk_size: Chunk size for initial data loading
         val_split: Fraction of data to use for validation
         preprocessed_dir: Directory to save preprocessed data
+        model_type: "gru" or "gb" for neural network or gradient boosting
         
     Returns:
         pipeline: Fitted preprocessing pipeline
@@ -194,7 +227,7 @@ def setup_pipeline_and_model(X_path, y_path, batch_size,
         val_path: Path to preprocessed validation data file
     """
     # Initialize the pipeline
-    pipeline = create_order_book_pipeline()
+    pipeline = create_order_book_pipeline(model_type=model_type)
     
     # Load all data for preprocessing - directly, without OrderBookDataGenerator
     print("Loading all data for preprocessing...")
@@ -209,15 +242,28 @@ def setup_pipeline_and_model(X_path, y_path, batch_size,
     n_venues = len(pipeline.named_steps['vectorizer'].venue_mapping)
     n_actions = len(pipeline.named_steps['vectorizer'].action_mapping)
     
-    print(f"Creating model with {n_venues} venues and {n_actions} actions")
-    model = OrderBookEmbeddingModel(
-        n_venues=n_venues,
-        n_actions=n_actions,
-        n_categories=24,
-        epochs=1,
-        batch_size=batch_size,
-        learning_rate=3e-3,
-    )
+    print(f"Creating {model_type} model with {n_venues} venues and {n_actions} actions")
+    
+    # Common parameters for both models
+    common_params = {
+        "n_categories": 24
+    }
+    
+    if model_type.lower() == "gru":
+        model = create_model("gru", 
+                            n_venues=n_venues,
+                            n_actions=n_actions,
+                            epochs=1,
+                            batch_size=batch_size,
+                            learning_rate=3e-3,
+                            **common_params)
+    else:
+        model = create_model("gb",
+                            n_estimators=100,
+                            learning_rate=0.1,
+                            max_depth=7,
+                            batch_size=batch_size,
+                            **common_params)
     
     # If no preprocessed directory specified, return without preprocessing
     if preprocessed_dir is None:
@@ -267,20 +313,21 @@ def setup_pipeline_and_model(X_path, y_path, batch_size,
             'label': [y_dict[obs_id] for obs_id in obs_list]
         })
         
-        # Add the preprocessed features
+        # Add the preprocessed features based on what's available in X_dict
         for i, pos in enumerate(positions):
-            # For each input type, extract the features for this position
-            venue_input = X_dict['venue_input'][pos]
-            action_input = X_dict['action_input'][pos]
-            trade_input = X_dict['trade_input'][pos]
-            numeric_input = X_dict['numeric_input'][pos]
-            
-            # Store as serialized numpy arrays
-            df.at[i, 'venue_input'] = pickle.dumps(venue_input)
-            df.at[i, 'action_input'] = pickle.dumps(action_input)
-            df.at[i, 'trade_input'] = pickle.dumps(trade_input)
-            df.at[i, 'numeric_input'] = pickle.dumps(numeric_input)
-            
+            # Check what type of data is in X_dict and adapt accordingly
+            if isinstance(X_dict, pd.DataFrame):
+                # For GB model that returns a DataFrame
+                row = X_dict.iloc[pos]
+                # Store the entire row as serialized data
+                df.at[i, 'features'] = pickle.dumps(row)
+            else:
+                # For GRU model that returns a dictionary with specific keys
+                # Store whatever features are available
+                for feature_name in X_dict.keys():
+                    feature_data = X_dict[feature_name][pos]
+                    df.at[i, feature_name] = pickle.dumps(feature_data)
+                    
         return df
     
     # Create and save train dataframe
@@ -379,7 +426,8 @@ def plot_loss_history(train_losses, val_losses, title="Model Training History"):
 
 def main(X_path, y_path, batch_size, chunk_size, n_epochs, val_split,
          visualize, n_samples_to_visualize, output_dir, 
-         model_save_dir, preprocessed_dir, use_existing_preprocessed=False):
+         model_save_dir, preprocessed_dir, use_existing_preprocessed=False,
+         model_type="gru", model_params=None):
     """
     Main function to run the training with preprocessed data
     
@@ -420,7 +468,7 @@ def main(X_path, y_path, batch_size, chunk_size, n_epochs, val_split,
         print(f"  - Validation data: {val_path}")
         
         # Create and initialize the pipeline
-        pipeline = create_order_book_pipeline()
+        pipeline = create_order_book_pipeline(model_type=model_type)  # Add model_type parameter
         
         # We need to fit the pipeline on a small sample to get feature mappings
         print("Loading a small sample of data to fit the pipeline...")
@@ -428,23 +476,44 @@ def main(X_path, y_path, batch_size, chunk_size, n_epochs, val_split,
         pipeline.fit(sample_X)
         
         # Create model with mappings from pipeline
-        n_venues = len(pipeline.named_steps['vectorizer'].venue_mapping)
-        n_actions = len(pipeline.named_steps['vectorizer'].action_mapping)
-        
-        print(f"Creating model with {n_venues} venues and {n_actions} actions")
-        model = OrderBookEmbeddingModel(
-            n_venues=n_venues,
-            n_actions=n_actions,
-            n_categories=24,
-            epochs=1,
-            batch_size=batch_size,
-            learning_rate=3e-3,
-        )
+        if model_type.lower() == "gb":
+            # For GB pipeline, vectorizer is nested inside base_pipeline
+            n_venues = len(pipeline.named_steps['base_pipeline'].named_steps['vectorizer'].venue_mapping)
+            n_actions = len(pipeline.named_steps['base_pipeline'].named_steps['vectorizer'].action_mapping)
+        else:
+            # For GRU pipeline, vectorizer is directly accessible
+            n_venues = len(pipeline.named_steps['vectorizer'].venue_mapping)
+            n_actions = len(pipeline.named_steps['vectorizer'].action_mapping)
+
+        print(f"Creating {model_type} model with {n_venues} venues and {n_actions} actions")
+        if model_type.lower() == "gru":
+            model = create_model("gru",
+                n_venues=n_venues,
+                n_actions=n_actions,
+                n_categories=24,
+                epochs=1,
+                batch_size=batch_size,
+                learning_rate=3e-3,
+            )
+        elif model_type.lower() == "gb":  # "gb"
+            model = create_model("gb",
+                n_categories=24,
+                n_estimators=model_params.get("n_estimators", 100),
+                learning_rate=model_params.get("learning_rate", 0.1),
+                max_depth=model_params.get("max_depth", 7),
+                min_data_in_leaf=model_params.get("min_data_in_leaf", 1),
+                feature_fraction=model_params.get("feature_fraction", 1.0),
+                bagging_fraction=model_params.get("bagging_fraction", 1.0),
+                bagging_freq=model_params.get("bagging_freq", 0),
+                batch_size=batch_size
+            )
+        else:
+            raise ValueError(f"Unknown model type: {model_type}. Choose 'gru' or 'gb'.")
     else:
         # Standard process: set up pipeline, model, and preprocess data
         print("Preprocessing data...")
         pipeline, model, train_path, val_path = setup_pipeline_and_model(
-            X_path, y_path, batch_size, val_split, preprocessed_dir
+            X_path, y_path, batch_size, val_split, preprocessed_dir, model_type=model_type
         )
     
     # Create data generators for train and validation
@@ -460,19 +529,27 @@ def main(X_path, y_path, batch_size, chunk_size, n_epochs, val_split,
     for epoch in range(n_epochs):
         print(f"\n--- Epoch {epoch+1}/{n_epochs} ---")
         
-        # Training phase
         print("Training phase:")
         train_losses = []
         for chunk_idx, (X_filtered, y_values) in enumerate(train_gen.generate_chunks()):
             print(f"Training on chunk {chunk_idx+1} with {len(y_values)} observations")
             
-            # Train on this chunk
-            model, loss_value = model.fit(X_filtered, y_values)
+            # When applying the feature extractor
+            if model_type.lower() == "gb":
+                # Create and apply a new feature extractor
+                from order_book.preprocessing import GBFeatureExtractor
+                feature_extractor = GBFeatureExtractor()
+                
+                # Pass both the data dictionary and observation IDs
+                # Either retrieve the obs_ids from somewhere or include them in X_filtered
+                X_filtered = feature_extractor.fit_transform(X_filtered)  # Update this line
+                
+        
             train_losses.append(loss_value)
             
             # Save model checkpoint periodically
             if (chunk_idx + 1) % 10 == 0:
-                save_model_checkpoint(model, pipeline, epoch, chunk_idx, model_save_dir)
+                save_model_checkpoint(model, pipeline, epoch, chunk_idx, model_save_dir, is_final=False, model_type=model_type)
                 print(f"Average training loss: {np.mean(train_losses):.4f}")
                 print(f"Processed {chunk_idx+1} chunks")
             # Clean up memory
@@ -501,11 +578,11 @@ def main(X_path, y_path, batch_size, chunk_size, n_epochs, val_split,
         # Save best model
         if epoch_val_loss < best_val_loss:
             best_val_loss = epoch_val_loss
-            save_model_checkpoint(model, pipeline, epoch, 0, model_save_dir, is_final=False)
-            print(f"New best model saved with validation loss: {best_val_loss:.4f}")
+            save_model_checkpoint(model, pipeline, epoch, chunk_idx, model_save_dir, is_final=False, model_type=model_type)
+            print(f"New best {model_type.upper()} model saved with validation loss: {best_val_loss:.4f}")
 
     # Save final model
-    save_model_checkpoint(model, pipeline, n_epochs, 0, model_save_dir, is_final=True)
+    save_model_checkpoint(model, pipeline, n_epochs, 0, model_save_dir, is_final=True, model_type=model_type)
     print(f"Training completed. Final validation loss: {epoch_val_loss:.4f}")
 
     history = {

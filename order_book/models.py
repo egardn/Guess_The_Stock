@@ -8,6 +8,9 @@ import random
 import matplotlib.pyplot as plt
 import seaborn as sns
 import shap  # Add SHAP import
+import lightgbm as lgbm  # or import xgboost as xgb
+import pandas as pd
+
 
 # Define embedding dimensions as constants
 VENUE_EMBED_DIM = 8
@@ -403,3 +406,128 @@ class OrderBookEmbeddingModel(BaseEstimator, TransformerMixin):
             
             plt.tight_layout()
             return fig
+
+
+# Replace the OrderBookGradientBoostingModel class with this version
+
+class OrderBookGradientBoostingModel(BaseEstimator, TransformerMixin):
+    """
+    Gradient boosting model for order book classification using pipeline preprocessing
+    """
+    def __init__(self, n_estimators=100, learning_rate=0.1, max_depth=7, 
+                 min_data_in_leaf=20, feature_fraction=0.8, bagging_fraction=0.8,
+                 bagging_freq=5, n_categories=24, batch_size=None, 
+                 verbose=1, reg_alpha=0.0, reg_lambda=0.0):
+        self.n_estimators = n_estimators
+        self.learning_rate = learning_rate
+        self.max_depth = max_depth
+        self.min_data_in_leaf = min_data_in_leaf
+        self.feature_fraction = feature_fraction
+        self.bagging_fraction = bagging_fraction
+        self.bagging_freq = bagging_freq
+        self.n_categories = n_categories
+        self.batch_size = batch_size  # Not used but kept for API compatibility
+        self.verbose = verbose
+        self.reg_alpha = reg_alpha
+        self.reg_lambda = reg_lambda
+        self.model = None
+        
+    def create_model(self):
+        # Print parameters for debugging
+        print("Creating LightGBM model with parameters:")
+        print(f"  n_estimators: {self.n_estimators}")
+        print(f"  learning_rate: {self.learning_rate}")
+        print(f"  max_depth: {self.max_depth}")
+        print(f"  min_data_in_leaf: {self.min_data_in_leaf}")
+        print(f"  feature_fraction: {self.feature_fraction}")
+        
+        # Create LightGBM model with improved parameters
+        model = lgbm.LGBMClassifier(
+            n_estimators=self.n_estimators,
+            learning_rate=self.learning_rate,
+            max_depth=self.max_depth,
+            min_child_samples=self.min_data_in_leaf,
+            colsample_bytree=self.feature_fraction,  # Fixed the truncated parameter
+            subsample=self.bagging_fraction,
+            subsample_freq=self.bagging_freq,
+            objective='multiclass',
+            num_class=self.n_categories,
+            reg_alpha=self.reg_alpha,
+            reg_lambda=self.reg_lambda,
+            n_jobs=-1,
+            verbose=self.verbose,
+            boosting_type='gbdt',
+            min_split_gain=0.001,  # Set a small non-zero value here
+            is_unbalance=True
+        )
+        return model
+    
+    def fit(self, X, y):
+        """Fit the gradient boosting model to the data."""
+        # Initialize model if not already done
+        if self.model is None:
+            self.model = self.create_model()
+        
+        # Keep track of categorical columns if needed
+        categorical_features = [col for col in X.columns if 
+                               ('most_common' in col or 
+                                'unique' in col or 
+                                '_count' in col)]
+        
+        # Train model with improved parameters
+        self.model.fit(
+            X, y,
+            categorical_feature=categorical_features if categorical_features else 'auto',
+            eval_metric='multi_logloss'  # Use log loss for multiclass classification
+        )
+        
+        # Return loss value for consistency with other model types
+        # Use training log loss as an approximation
+        train_preds = self.model.predict_proba(X)
+        loss_value = -np.mean(np.log(train_preds[np.arange(len(y)), y] + 1e-10))
+        
+        return self, loss_value
+    
+    def predict(self, X, explain=False, X_background=None, visualize=False, top_k=20):
+        """Generate predictions and optionally explanations."""
+        # X should already be preprocessed by the pipeline into a DataFrame
+        predictions = self.model.predict(X)
+        
+        if not explain:
+            return predictions
+            
+        # For feature importance
+        importance = self.model.feature_importances_
+        feature_names = X.columns
+        importance_dict = dict(zip(feature_names, importance))
+        
+        if not visualize:
+            return predictions, importance_dict
+        
+        # Create visualization
+        fig = self.visualize_feature_importance(importance_dict, top_k)
+        return predictions, importance_dict, fig
+    
+    def evaluate(self, X, y):
+        """Evaluate the model on validation data."""
+        # Calculate log loss for consistent comparison with neural models
+        y_proba = self.model.predict_proba(X)
+        log_loss = -np.mean(np.log(y_proba[np.arange(len(y)), y] + 1e-10))
+        return log_loss
+    
+    def visualize_feature_importance(self, importance_dict, top_k=10):
+        """Visualize feature importances."""
+        # Sort features by importance
+        sorted_features = dict(sorted(importance_dict.items(), 
+                                      key=lambda x: x[1], 
+                                      reverse=True)[:top_k])
+        
+        # Create plot
+        fig = plt.figure(figsize=(10, 8))
+        plt.barh(list(sorted_features.keys()), list(sorted_features.values()))
+        plt.xlabel('Importance')
+        plt.ylabel('Feature')
+        plt.title('Gradient Boosting Feature Importance')
+        plt.tight_layout()
+        
+        return fig
