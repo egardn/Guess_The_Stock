@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, Any, Tuple
 import pandas as pd
+from pathlib import Path
 from gts_challenge.order_book.base.model_interface import ModelInterface
 from gts_challenge.order_book.base.pipeline_interface import PipelineInterface
 
@@ -213,49 +214,68 @@ def api_explain_workflow(model_type: str, model: Any, pipeline: Any, X_df: pd.Da
 
 def train_workflow(model_type: str, X_path: str, y_path: str, **params) -> Tuple[ModelInterface, PipelineInterface, Dict[str, Any]]:
     """
-    Exécute le workflow complet d'entraînement pour un type de modèle donné.
+    Orchestrates the training process including preprocessing, model creation,
+    training, and saving.
 
     Args:
-        model_type: 'gru' ou 'gb'
-        X_path: Chemin vers les données X
-        y_path: Chemin vers les données y
-        **params: Paramètres additionnels (val_split, preprocessed_dir, chunk_size, model_params, etc.)
+        model_type (str): Type of model ('gru' or 'gb').
+        X_path (str): Path to the input features data file.
+        y_path (str): Path to the target labels data file.
+        **params: Additional parameters including model_params, chunk_size,
+                  val_split, preprocessed_dir, checkpoint_dir, epochs (for GRU),
+                  gb_features (for GB).
 
     Returns:
-        Modèle entraîné, pipeline et historique d'entraînement
+        Tuple[ModelInterface, PipelineInterface, Dict[str, Any]]:
+            The trained model, the fitted pipeline, and the training history.
     """
     logger.info(f"Starting training workflow for model type: {model_type}")
     workflow = create_workflow(model_type)
-
-    # Prétraitement des données
-    logger.info("Preprocessing data...")
     preprocess_fn = workflow['preprocess_fn']
-    X_train_path, y_train_path, X_val_path, y_val_path = preprocess_fn(
-        X_path=X_path,
-        y_path=y_path,
-        val_split=params.get('val_split'),
-        preprocessed_dir=params.get('preprocessed_dir'),
-        chunk_size=params.get('chunk_size')
-    )
-    logger.info(f"Preprocessing complete. Train data: {X_train_path}, {y_train_path}. Validation data: {X_val_path}, {y_val_path}")
+
+    # Preprocessing
+    logger.info("Starting preprocessing...")
+    preprocessed_dir = Path(params.get('preprocessed_dir', './preprocessed_data'))
+    preprocessed_dir.mkdir(parents=True, exist_ok=True)
+
+    # Extract gb_features specifically for the preprocessing step if model_type is 'gb'
+    preprocess_args = {
+        'X_path': X_path,
+        'y_path': y_path,
+        'val_split': params.get('val_split'),
+        'preprocessed_dir': preprocessed_dir,
+        'chunk_size': params.get('chunk_size')
+    }
+    if model_type == 'gb':
+        preprocess_args['gb_features'] = params.get('gb_features', 'all') # Extract gb_features
+
+    X_train_path, y_train_path, X_val_path, y_val_path, pipeline_path = preprocess_fn(**preprocess_args) # Pass gb_features if applicable
+    logger.info(f"Preprocessing complete. Train data: {X_train_path}, {y_train_path}. Val data: {X_val_path}, {y_val_path}. Pipeline: {pipeline_path}")
+
+    # Load the fitted pipeline
+    try:
+        pipeline_instance = workflow['pipeline'].load(pipeline_path) # Use the load method from the correct class
+        logger.info(f"Loaded fitted pipeline from {pipeline_path}")
+    except Exception as e:
+        logger.error(f"Failed to load pipeline from {pipeline_path}: {e}", exc_info=True)
+        raise
 
     # Création et entraînement du modèle
     logger.info("Creating and training model...")
     model_creator = workflow['model_creator']
     train_fn = workflow['train_fn']
-    pipeline_instance = workflow['pipeline'] # Get the pipeline instance created by create_workflow
 
     model = model_creator(**params.get('model_params', {}))
     model, history = train_fn(
         model=model,
-        pipeline=pipeline_instance, # Pass the pipeline instance
+        pipeline=pipeline_instance, # Pass the loaded pipeline instance
         X_train_path=X_train_path,
         y_train_path=y_train_path,
         X_val_path=X_val_path,
         y_val_path=y_val_path,
-        **params # Pass other training params like epochs, batch_size etc.
+        **params # Pass remaining params like checkpoint_dir, chunk_size etc.
     )
-    logger.info("Training complete.")
+    logger.info("Model training finished.")
 
     return model, pipeline_instance, history
 

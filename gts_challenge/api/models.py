@@ -5,28 +5,27 @@ from datetime import datetime
 class OrderBookEvent(BaseModel):
     """Single order book event data"""
     venue: int
-    order_id: int # <-- Add order_id
+    order_id: int 
     action: str
-    side: str # <-- Add side
+    side: str 
     trade: bool
-    bid: float # Removed gt=0 constraint
-    ask: float # Removed gt=0 constraint
-    price: float # Removed ge=0 constraint
-    bid_size: float = Field(..., gt=0) # Keep positivity for size
-    ask_size: float = Field(..., gt=0) # Keep positivity for size
+    bid: float
+    ask: float
+    price: float 
+    bid_size: float = Field(..., gt=0)
+    ask_size: float = Field(..., gt=0)
     flux: float
 
     @validator('action')
     def action_must_be_valid(cls, v):
-        # Example: Add validation for known action types if available
-        valid_actions = {'A', 'D', 'U'} # Based on README
+        valid_actions = {'A', 'D', 'U'}
         if v not in valid_actions:
             raise ValueError(f'Invalid action type: {v}. Must be one of {valid_actions}')
         return v
 
     @validator('side') # <-- Add validator for side
     def side_must_be_valid(cls, v):
-        valid_sides = {'A', 'B'} # Based on README
+        valid_sides = {'A', 'B'}
         if v not in valid_sides:
             raise ValueError(f'Invalid side: {v}. Must be one of {valid_sides}')
         return v

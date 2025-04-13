@@ -470,65 +470,74 @@ class OrderBookGRUModel(ModelInterface, BaseEstimator, TransformerMixin):
 
     def visualize_feature_importance(self, importance_scores, top_k=10):
         """
-        Visualize permutation feature importance results
-        
+        Visualize permutation feature importance results (handles flat percentage dictionary).
+
         Args:
-            importance_scores: Result from permutation_feature_importance()
-            top_k: Number of top features to show for each group
-            consolidated: If True, displays all features in a single plot
-            
+            importance_scores: Flat dictionary of feature importance percentages.
+            top_k: Number of top features to show.
+
         Returns:
             matplotlib figure
         """
-        
-        # Create consolidated view with all features in a single plot
-        # Collect all features into a single dictionary
-        all_features = {}
-        
-        # Add venue feature
-        if 'venue' in importance_scores and 'venue_all' in importance_scores['venue']:
-            all_features['venue_sequence'] = importance_scores['venue']['venue_all']
-        
-        # Add action feature
-        if 'action' in importance_scores and 'action_all' in importance_scores['action']:
-            all_features['action_sequence'] = importance_scores['action']['action_all']
-        
-        # Add trade feature
-        if 'trade' in importance_scores and 'trade_all' in importance_scores['trade']:
-            all_features['trade_sequence'] = importance_scores['trade']['trade_all']
-        
-        # Add numeric features
-        if 'numeric' in importance_scores:
-            for feat, score in importance_scores['numeric'].items():
-                all_features[f'numeric_{feat}'] = score
-        
+        # Check if the input is the flat percentage dictionary
+        if not isinstance(importance_scores, dict) or not all(isinstance(v, (float, np.floating)) for v in importance_scores.values()):
+             print("Warning: visualize_feature_importance expected a flat dictionary of importance percentages.")
+             # Attempt to handle the old nested structure for backward compatibility (optional)
+             # Or simply return an empty figure or raise an error
+             # For now, let's assume the flat structure is passed
+             all_features = {} # Or handle old structure if needed
+        else:
+             # Directly use the flat dictionary
+             all_features = importance_scores.copy()
+
+
         # Sort features by importance
-        sorted_features = dict(sorted(all_features.items(), key=lambda x: x[1], reverse=True))
-        
+        # Ensure values are numeric before sorting
+        valid_features = {k: v for k, v in all_features.items() if isinstance(v, (int, float, np.number))}
+        sorted_features = dict(sorted(valid_features.items(), key=lambda item: item[1], reverse=True))
+
+        # Take top K features
+        top_features = dict(list(sorted_features.items())[:top_k])
+
+        if not top_features:
+             print("No features to plot.")
+             return plt.figure() # Return empty figure
+
         # Create the visualization
-        fig = plt.figure(figsize=(12, 8))
+        fig = plt.figure(figsize=(12, max(6, len(top_features) * 0.5))) # Adjust height based on number of features
         ax = fig.add_subplot(111)
-        
+
         # Plot horizontal bars
-        y_pos = range(len(sorted_features))
-        bars = ax.barh(y_pos, list(sorted_features.values()), align='center')
+        y_pos = np.arange(len(top_features))
+        feature_names = list(top_features.keys())
+        scores = list(top_features.values())
+
+        bars = ax.barh(y_pos, scores, align='center')
+
         ax.set_yticks(y_pos)
-        ax.set_yticklabels(list(sorted_features.keys()))
+        ax.set_yticklabels(feature_names)
         ax.invert_yaxis()  # Labels read top-to-bottom
-        ax.set_xlabel('Mean Change in Probability Distribution')
-        ax.set_title('Consolidated Feature Importance')
-        
-        # Color bars by feature group
-        for i, feature_name in enumerate(sorted_features.keys()):
+        ax.set_xlabel('Importance Percentage') # Updated label
+        ax.set_title(f'Top {len(top_features)} Feature Importances (Intra-Observation Permutation)') # Updated title
+
+        # Add values on bars
+        for i, v in enumerate(scores):
+            ax.text(v + (max(scores) * 0.01), i, f" {v:.3f}", va='center', color='grey')
+
+
+        # Color bars by feature group (heuristic based on name)
+        for i, feature_name in enumerate(feature_names):
             if 'venue' in feature_name:
                 bars[i].set_color('skyblue')
             elif 'action' in feature_name:
                 bars[i].set_color('lightgreen')
             elif 'trade' in feature_name:
                 bars[i].set_color('salmon')
+            elif 'numeric' in feature_name:
+                bars[i].set_color('lightcoral') # Example color for numeric
             else:
-                bars[i].set_color('lightsalmon')
-        
+                bars[i].set_color('lightgrey') # Default
+
         plt.tight_layout()
         return fig
             

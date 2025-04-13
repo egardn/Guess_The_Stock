@@ -39,10 +39,10 @@ def read_root():
         status="API is running",
         start_time=app_start_time.isoformat(),  # Assuming app_start_time is available
         uptime=uptime,
-        loaded_models=list(model_loader.loaded_models.keys()),  # List of keys
-        model_load_times={k: v.isoformat() if v else None for k, v in model_loader.load_times.items()},
-        loaded_pipelines=list(model_loader.loaded_pipelines.keys()),  # List of keys
-        pipeline_load_times={k: v.isoformat() if v else None for k, v in model_loader.pipeline_load_times.items()}
+        loaded_models=list(model_loader._models.keys()),  # Use _models internal dict
+        model_load_times={k: v.isoformat() if v else None for k, v in model_loader._load_times.items()}, # Use _load_times
+        loaded_pipelines=list(model_loader._pipelines.keys()),  # Use _pipelines internal dict
+        pipeline_load_times={k: v.isoformat() if v else None for k, v in model_loader._pipeline_load_times.items()} # Use _pipeline_load_times
     )
 
 

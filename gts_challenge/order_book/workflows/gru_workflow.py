@@ -61,7 +61,7 @@ def preprocess_data(X_path, y_path, val_split, preprocessed_dir, chunk_size):
             y_train_path, y_val_path, 
             pipeline_path)
     
-    return X_train_path, y_train_path, X_val_path, y_val_path
+    return X_train_path, y_train_path, X_val_path, y_val_path, pipeline_path
 
 def create_and_fit_pipeline(X_train, y_train):
     """Create and fit the GRU pipeline"""
@@ -200,7 +200,7 @@ def explain(model, pipeline, X_path, **params):
     X, _ = pipeline.transform(X)
 
     # Get feature importances using intra-observation permutation
-    importance_scores = model.intra_observation_permutation_feature_importance(X)
+    importance_scores = model.intra_observation_permutation_feature_importance(X, k=10)
     model.visualize_feature_importance(importance_scores)
 
     return {'feature_importances': importance_scores}

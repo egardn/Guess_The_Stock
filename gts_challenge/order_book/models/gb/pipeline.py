@@ -3,6 +3,7 @@ import numpy as np
 import pickle
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 from gts_challenge.order_book.base.pipeline_interface import PipelineInterface
 from gts_challenge.order_book.data.preprocessors import NonPositiveBidSizeFilter, CategoricalEncoder, DataVectorizer, VectorizedSequenceReshaper
 
@@ -20,7 +21,7 @@ class GBPipeline(PipelineInterface):
 
     def fit(self, X, y=None):
         """Fits the pipeline to the data"""
-        X_filterd, _ = self.filter.fit_transform(X)
+        X_filtered, _ = self.filter.fit_transform(X)
         self.pipeline.fit(X_filtered, y)
         return self
         

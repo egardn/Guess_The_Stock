@@ -10,7 +10,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def preprocess_data(X_path, y_path, val_split, preprocessed_dir, chunk_size):
+def preprocess_data(X_path, y_path, val_split, preprocessed_dir, chunk_size, gb_features='all'):
     """GB-specific preprocessing implementation
     
     Args:
@@ -49,7 +49,7 @@ def preprocess_data(X_path, y_path, val_split, preprocessed_dir, chunk_size):
         X_train, X_val, y_train, y_val = train_val_split(X, y, val_split, random_state=42)
         
         # Process with pipeline
-        pipeline = create_and_fit_pipeline(X_train, y_train)
+        pipeline = create_and_fit_pipeline(X_train, y_train, gb_features=gb_features)
 
         X_train_transformed, X_val_transformed, y_train_transformed, y_val_transformed = transform_data(
             pipeline, X_train, y_train, X_val, y_val)
@@ -64,13 +64,14 @@ def preprocess_data(X_path, y_path, val_split, preprocessed_dir, chunk_size):
             y_train_path, y_val_path, 
             pipeline_path)
     
-    return X_train_path, y_train_path, X_val_path, y_val_path
+    return X_train_path, y_train_path, X_val_path, y_val_path, pipeline_path
 
-def create_and_fit_pipeline(X_train, y_train):
+def create_and_fit_pipeline(X_train, y_train, gb_features='all'):
     """Create and fit the GB pipeline"""
-    pipeline = GBPipeline()
+    pipeline = GBPipeline(gb_features=gb_features) # Pass gb_features to constructor
     print("Fitting pipeline...")
     start_time = time.time()
+    # Assuming fit method handles the dictionary input correctly
     pipeline.fit(X_train, y_train)
     print(f"Pipeline fitted in {time.time() - start_time:.2f} seconds")
     return pipeline
