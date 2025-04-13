@@ -2,7 +2,6 @@ fastapi==0.115.12
 h5py==3.13.0
 lightgbm==4.6.0
 matplotlib==3.10.1
-numpy==2.2.4
 optuna==4.2.1
 pandas==2.2.3
 preprocessing==0.1.13
@@ -10,5 +9,9 @@ pydantic==2.11.3
 scikit_learn==1.6.1
 seaborn==0.13.2
 shap==0.47.0
-tensorflow==2.17.0
-tensorflow_intel==2.17.0
+tensorflow==2.19.0
+uvicorn[standard]
+ipykernel
+pyarrow==19.0.1
+fastparquet==2024.11.0
+ipywidgets

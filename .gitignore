@@ -3,3 +3,5 @@ model_checkpoints/
 model_checkpoints_gb/
 model_checkpoints_gru/
 preprocessed_data/
+.venv/
+arborescence.txt
